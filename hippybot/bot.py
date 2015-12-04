@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 import os
 import sys
+import imp
 import codecs
 import time
 import traceback
@@ -8,7 +9,7 @@ import logging
 from jabberbot import botcmd, JabberBot, xmpp
 from ConfigParser import ConfigParser
 from optparse import OptionParser
-from inspect import ismethod
+from inspect import ismethod, getargspec
 from lazy_reload import lazy_reload
 
 from hippybot.hipchat import HipChatApi
@@ -20,15 +21,6 @@ RESERVED_COMMANDS = (
     'api',
 )
 
-def do_import(name):
-    """Helper function to import a module given it's full path and return the
-    module object.
-    """
-    mod = __import__(name)
-    components = name.split('.')
-    for comp in components[1:]:
-        mod = getattr(mod, comp)
-    return mod
 
 class HippyBot(JabberBot):
     """An XMPP/Jabber bot with specific customisations for working with the
@@ -47,30 +39,52 @@ class HippyBot(JabberBot):
         self._config = config
 
         prefix = config['connection']['username'].split('_')[0]
-        self._channels = [u"%s_%s@%s" % (prefix, c.strip().lower().replace(' ',
-                '_'), 'conf.hipchat.com') for c in
-                config['connection']['channels'].split('\n')]
 
-        username = u"%s@chat.hipchat.com" % (config['connection']['username'],)
+        self._channels = []
+        for channel in config['connection']['channels'].split('\n'):
+            # Only generate an XMPP room name from HipChat name if required
+            muc_domain = config['connection'].get('muc_domain',
+                                                  'conf.hipchat.com')
+            if muc_domain not in channel:
+                channel = u"%s_%s@%s" % (
+                    prefix,
+                    channel.strip().lower().replace(' ', '_'),
+                    muc_domain)
+            self._channels.append(channel)
+
+        username = u"%s@%s" % (config['connection']['username'],
+                               config['connection'].get('host',
+                                                        'chat.hipchat.com'))
         # Set this here as JabberBot sets username as private
         self._username = username
-        super(HippyBot, self).__init__(username=username,
-                                        password=config['connection']['password'])
+        super(HippyBot, self).__init__(
+            username=username,
+            password=config['connection']['password'])
         # Make sure we don't timeout after 150s
         self.PING_FREQUENCY = 50
 
         for channel in self._channels:
             self.join_room(channel, config['connection']['nickname'])
 
-        self._at_name = u"@%s " % (config['connection']['nickname'].replace(" ",""),)
-        self._at_short_name = u"@%s " % (config['connection']['nickname']
-                                        .split(' ')[0].lower(),)
+        self._at_name = u"@%s " % (
+            config['connection']['nickname'].replace(" ", ""),)
+        self._at_short_name = u"@%s " % (
+            config['connection']['nickname'].split(' ')[0].lower(),)
 
         plugins = config.get('plugins', {}).get('load', [])
         if plugins:
             plugins = plugins.strip().split('\n')
         self._plugin_modules = plugins
         self._plugins = {}
+        load_path = config.get('plugins', {}).get('load_path', [])
+        if load_path:
+            load_path = load_path.strip().split('\n')
+            self._load_path = []
+            for path in load_path:
+                if path[0:1] != '/':      # this is not an absolute path
+                    self._load_path.append('%s/%s' % (os.getcwd(), path))
+                else:
+                    self._load_path.append(path)
 
         self.load_plugins()
 
@@ -80,7 +94,7 @@ class HippyBot(JabberBot):
         """Helper method to test if a message was sent from this bot.
         """
         if unicode(mess.getFrom()).endswith("/%s" % (
-                        self._config['connection']['nickname'],)):
+                self._config['connection']['nickname'],)):
             return True
         else:
             return False
@@ -134,10 +148,10 @@ class HippyBot(JabberBot):
                     handler(mess)
                 except Exception, e:
                     self.log.exception(
-                            'An error happened while processing '
-                            'a message ("%s") from %s: %s"' %
-                            (mess.getType(), mess.getFrom(),
-                                traceback.format_exc(e)))
+                        'An error happened while processing '
+                        'a message ("%s") from %s: %s"' % (
+                            mess.getType(), mess.getFrom(),
+                            traceback.format_exc(e)))
 
         if u' ' in message:
             cmd = message.split(u' ')[0]
@@ -145,8 +159,9 @@ class HippyBot(JabberBot):
             cmd = message
 
         if cmd in self._command_aliases:
-            message = u"%s%s" % (self._command_aliases[cmd],
-                                message[len(cmd):])
+            message = u"%s%s" % (
+                self._command_aliases[cmd],
+                message[len(cmd):])
             cmd = self._command_aliases[cmd]
 
         ret = None
@@ -172,13 +187,14 @@ class HippyBot(JabberBot):
         my_room_JID = u'/'.join((room, username))
         pres = xmpp.Presence(to=my_room_JID)
         if password is not None:
-            pres.setTag('x',namespace=NS_MUC).setTagData('password',password)
+            pres.setTag(
+                'x', namespace=NS_MUC).setTagData('password', password)
         else:
-            pres.setTag('x',namespace=NS_MUC)
+            pres.setTag('x', namespace=NS_MUC)
 
         # Don't pull the history back from the server on joining channel
         pres.getTag('x').addChild('history', {'maxchars': '0',
-                                                'maxstanzas': '0'})
+                                              'maxstanzas': '0'})
         self.connect().send(pres)
 
     def _idle_ping(self):
@@ -190,7 +206,7 @@ class HippyBot(JabberBot):
         to HipChat, as XMPP ping doesn't seem to cut it.
         """
         if self.PING_FREQUENCY \
-            and time.time() - self._last_send_time > self.PING_FREQUENCY:
+                and time.time() - self._last_send_time > self.PING_FREQUENCY:
             self._last_send_time = time.time()
             self.send_message(' ')
 
@@ -201,13 +217,16 @@ class HippyBot(JabberBot):
     @botcmd(hidden=True)
     def load_plugins(self, mess=None, args=None):
         """Internal handler and bot command to dynamically load and reload
-        plugin classes based on the [plugins][load] section of the config.
+        plugin classes based on the [plugins][load] section of the config and
+        with respect of [plugins][load_path] option.
         """
         for path in self._plugin_modules:
             name = path.split('.')[-1]
             if name in self._plugins:
                 lazy_reload(self._plugins[name])
-            module = do_import(path)
+            (file, filename, data) = imp.find_module(name, self._load_path)
+            if file:
+                module = imp.load_module(name, file, filename, data)
             self._plugins[name] = module
 
             # If the module has a function matching the module/command name,
@@ -217,7 +236,14 @@ class HippyBot(JabberBot):
             if not command:
                 # Otherwise we're looking for a class called Plugin which
                 # provides methods decorated with the @botcmd decorator.
-                plugin = getattr(module, 'Plugin')()
+                (plugin_args, _, _, _) = getargspec(
+                    getattr(module, 'Plugin').__init__)
+                if 'config' in plugin_args:
+                    print 'Plugin has config parameter'
+                    plugin = getattr(module, 'Plugin')(config=self._config)
+                else:
+                    print 'Plugin has no config parameter'
+                    plugin = getattr(module, 'Plugin')()
                 plugin.bot = self
                 commands = [c for c in dir(plugin)]
                 funcs = []
@@ -227,22 +253,25 @@ class HippyBot(JabberBot):
                     m = getattr(plugin, command)
                     if ismethod(m) and getattr(m, '_jabberbot_command', False):
                         if command in RESERVED_COMMANDS:
-                            self.log.error('Plugin "%s" attempted to register '
-                                        'reserved command "%s", skipping..' % (
-                                            plugin, command
-                                        ))
+                            self.log.error(
+                                'Plugin "%s" attempted to register '
+                                'reserved command "%s", skipping..' % (
+                                    plugin, command
+                                    ))
                             continue
                         self.rewrite_docstring(m)
                         name = getattr(m, '_jabberbot_command_name', False)
                         self.log.info("command loaded: %s" % name)
                         funcs.append((name, m))
 
-                    if ismethod(m) and getattr(m, '_jabberbot_content_command', False):
+                    if ismethod(m) and getattr(m, '_jabberbot_content_command',
+                                               False):
                         if command in RESERVED_COMMANDS:
-                            self.log.error('Plugin "%s" attempted to register '
-                                        'reserved command "%s", skipping..' % (
-                                            plugin, command
-                                        ))
+                            self.log.error(
+                                'Plugin "%s" attempted to register '
+                                'reserved command "%s", skipping..' % (
+                                    plugin, command
+                                    ))
                             continue
                         self.rewrite_docstring(m)
                         name = getattr(m, '_jabberbot_command_name', False)
@@ -252,16 +281,16 @@ class HippyBot(JabberBot):
                 # Check for commands that don't need to be directed at
                 # hippybot, e.g. they can just be said in the channel
                 self._global_commands.extend(getattr(plugin,
-                                                'global_commands', []))
+                                                     'global_commands', []))
                 # Check for "special commands", e.g. those that can't be
                 # represented in a python method name
                 self._command_aliases.update(getattr(plugin,
-                                                'command_aliases', {}))
+                                                     'command_aliases', {}))
 
                 # Check for handlers for all XMPP message types,
                 # this can be used for low-level checking of XMPP messages
                 self._all_msg_handlers.extend(getattr(plugin,
-                                                'all_msg_handlers', []))
+                                                      'all_msg_handlers', []))
             else:
                 funcs = [(name, command)]
 
@@ -275,6 +304,7 @@ class HippyBot(JabberBot):
             return 'Reloading plugin modules and classes..'
 
     _api = None
+
     @property
     def api(self):
         """Accessor for lazy-loaded HipChatApi instance
@@ -282,10 +312,13 @@ class HippyBot(JabberBot):
         if self._api is None:
             auth_token = self._config.get('hipchat', {}).get(
                 'api_auth_token', None)
+            api_server = self._config.get('hipchat', {}).get(
+                'api_server', 'api.hipchat.com')
             if auth_token is None:
                 self._api = False
             else:
-                self._api = HipChatApi(auth_token=auth_token)
+                self._api = HipChatApi(
+                    auth_token=auth_token, api_server=api_server)
         return self._api
 
     def top_of_help_message(self):
@@ -342,6 +375,7 @@ class HippyBot(JabberBot):
 
 class HippyDaemon(Daemon):
     config = None
+
     def run(self):
         try:
             bot = HippyBot(self.config._sections)
@@ -353,17 +387,19 @@ class HippyDaemon(Daemon):
         else:
             return 0
 
+
 def main():
     import logging
     logging.basicConfig()
 
     parser = OptionParser(usage="""usage: %prog [options]""")
 
-    parser.add_option("-c", "--config", dest="config_path", help="Config file path")
+    parser.add_option("-c", "--config", dest="config_path",
+                      help="Config file path")
     parser.add_option("-d", "--daemon", dest="daemonise", help="Run as a"
-            " daemon process", action="store_true")
+                      " daemon process", action="store_true")
     parser.add_option("-p", "--pid", dest="pid", help="PID file location if"
-            " running with --daemon")
+                      " running with --daemon")
     (options, pos_args) = parser.parse_args()
 
     if not options.config_path:
@@ -371,7 +407,8 @@ def main():
         return 1
 
     config = ConfigParser()
-    config.readfp(codecs.open(os.path.abspath(options.config_path), "r", "utf8"))
+    config.readfp(codecs.open(os.path.abspath(options.config_path), "r",
+                              "utf8"))
 
     pid = options.pid
     if not pid:

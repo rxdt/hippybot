@@ -1,14 +1,28 @@
 [connection]
 username = 12345_12345
 password = keepmesecret
+# The Hipchat's server name
+host = conf.hipchat.com
+# MUC Domain, for use with HipChat Server
+# set this to your self-hosted HC domain if you use it
+#muc_domain = conf.hipchat.com
+
 nickname = Hippy Bot
 channels = Hippy Bot's Room
            test
            My Room
+# a list of plugins that should be loaded from a list of directories.
 [plugins]
-load = hippybot.plugins.rot13
-       hippybot.plugins.wave
+load = rot13
+       mexican_wave
+
+load_path = /absolute/path/plugins
+	hippybot/plugins
+	plugins
+	another/relative/path
+
 [hipchat]
+api_server = api.hipchat.com
 api_auth_token = xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 respond_to_all = true
 [help]

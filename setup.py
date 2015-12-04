@@ -29,5 +29,8 @@ setup(
     entry_points={
         'console_scripts': ['hippybot = hippybot.bot:main',],
     },
+    dependency_links=[
+        'https://github.com/ArchipelProject/xmpppy.git#egg=xmpppy',
+    ],
     license='BSD'
 )

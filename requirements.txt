@@ -1,5 +1,5 @@
 jabberbot >= 0.15
--e git+https://github.com/ArchipelProject/xmpppy
+-e git+https://github.com/ArchipelProject/xmpppy.git#egg=Package
 lazy-reload
 requests
 simplejson

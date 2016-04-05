@@ -1,4 +1,4 @@
-jabberbot >= 0.15
+-e git://github.com/rxdt/jabberbot.git@#egg=jabberbot
 xmpppy
 lazy-reload
 requests

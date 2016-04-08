@@ -20,7 +20,14 @@ setup(
     author_email='wes[at]1stvamp[dot]org',
     url='http://github.com/1stvamp/hippybot',
     packages=find_packages(exclude=['ez_setup']),
-    install_requires=open('requirements.txt').readlines(),
+    install_requires=[
+        'jabberbot',
+        'lazy-reload==1.1',
+        'requests==2.9.1',
+        'simplejson==3.8.2',
+        'wheel==0.24.0',
+        'xmpppy>=0.5.0',
+    ],
     package_data={'hippybot': ['version.txt']},
     include_package_data=True,
     extras_require={
@@ -31,6 +38,7 @@ setup(
     },
     dependency_links=[
         'https://github.com/ArchipelProject/xmpppy.git#egg=xmpppy',
+        'https://github.com/rxdt/jabberbot.git#egg=jabberbot',
     ],
     license='BSD'
 )

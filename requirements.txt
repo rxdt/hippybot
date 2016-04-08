@@ -1,4 +1,4 @@
--e git://github.com/rxdt/jabberbot.git@#egg=jabberbot
+-e git://github.com/rxdt/jabberbot.git@ad112555de45517d83040be41370958c1ffafcf9#egg=jabberbot-master
 xmpppy
 lazy-reload
 requests
